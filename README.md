@@ -103,6 +103,15 @@ Open [http://localhost:5173/](http://localhost:5173/) in your web browser.
 
 ---
 
+## Watch and translate a YouTube stream
+
+1. Start the Node server, AI service, and frontend as described above. Restart the AI service after pulling changes so the `/audio` route is loaded.
+2. In StadiumVoice, choose the language you want to hear, press the play button, and paste a public YouTube URL into **Watch + Translate**.
+3. Press **Share tab audio**. In the browser prompt, choose the tab containing the YouTube player and enable **Share tab audio**.
+4. Select the source commentary language. The app sends short audio segments to the AI service, displays the recognized phrase, then translates and voices it in the selected listener language.
+
+YouTube embeds cannot be read directly by a webpage because of browser cross-origin protections; explicit tab-audio sharing is the supported route. Chrome or Edge provides the most reliable tab-audio sharing experience.
+
 ## 🎮 How to Run the Simulation
 
 1.  Open the web dashboard at [http://localhost:5173/](http://localhost:5173/).

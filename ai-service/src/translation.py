@@ -41,7 +41,7 @@ def translate_commentary(text: str, lang_code: str) -> str:
         'en': 'English'
     }
     target_lang = lang_names.get(lang_code, lang_code)
-    prompt = f"Translate the following sports commentary to {target_lang}. Return ONLY the translated text without explanations:\n\n{text}"
+    prompt = f"Translate the following sports commentary to {target_lang}. CRITICAL: You must return ONLY the raw translated text. DO NOT output any <think> blocks, internal thoughts, or explanations:\n\n{text}"
     
     max_retries = 3
     delay = 1.5
