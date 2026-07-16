@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 # Import the functions we built in the previous step
 from src.translation import translate_commentary
 from src.tts import generate_audio_stream
+from src.vad import wav_segments_from_buffer
 
 load_dotenv()
 app = FastAPI()
@@ -125,23 +126,65 @@ async def receive_commentary(commentary: CommentaryInput, background_tasks: Back
 
 @app.post("/audio")
 async def receive_audio(audio_chunk: AudioChunk, background_tasks: BackgroundTasks):
-    """Transcribe a short PCM WAV segment captured from a shared browser tab."""
+    """
+    Transcribe a short PCM WAV segment captured from a shared browser tab.
+
+    Pipeline:
+      1. Decode the incoming Base64 WAV buffer.
+      2. Run webrtcvad to split the buffer into voiced speech segments,
+         discarding silence and background stadium noise between phrases.
+      3. Transcribe each voiced segment independently with SpeechRecognition.
+      4. Broadcast the combined transcript through the translation → TTS pipeline.
+    """
     try:
         raw_audio = base64.b64decode(audio_chunk.audio, validate=True)
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(io.BytesIO(raw_audio)) as source:
-            audio_data = recognizer.record(source)
-        locale = SPEECH_LANGUAGE_MAP.get(audio_chunk.sourceLanguage, audio_chunk.sourceLanguage)
-        transcript = await asyncio.to_thread(recognizer.recognize_google, audio_data, language=locale)
-    except sr.UnknownValueError:
-        return {"message": "No speech detected"}
     except Exception as error:
-        print(f"Audio transcription error: {error}")
-        return {"message": "Audio could not be transcribed", "detail": str(error)}
+        return {"message": "Invalid base64 audio data", "detail": str(error)}
 
+    # ── Step 1: VAD segmentation ──────────────────────────────────────────────
+    # wav_segments_from_buffer returns a list of WAV byte-strings, one per
+    # detected voiced segment. Silence / pure crowd noise returns an empty list.
+    try:
+        speech_wav_segments = await asyncio.to_thread(wav_segments_from_buffer, raw_audio)
+    except Exception as error:
+        print(f"VAD error (falling back to full buffer): {error}")
+        speech_wav_segments = [raw_audio]  # Graceful fallback: process entire buffer
+
+    if not speech_wav_segments:
+        return {"message": "No speech detected — only silence or background noise found"}
+
+    # ── Step 2: Transcribe each voiced segment ────────────────────────────────
+    recognizer = sr.Recognizer()
+    locale = SPEECH_LANGUAGE_MAP.get(audio_chunk.sourceLanguage, audio_chunk.sourceLanguage)
+    transcripts: list[str] = []
+
+    # Cap at 3 segments per payload to avoid runaway processing on noisy clips.
+    for segment_wav in speech_wav_segments[:3]:
+        try:
+            with sr.AudioFile(io.BytesIO(segment_wav)) as source:
+                audio_data = recognizer.record(source)
+            text = await asyncio.to_thread(
+                recognizer.recognize_google, audio_data, language=locale
+            )
+            if text:
+                transcripts.append(text.strip())
+        except sr.UnknownValueError:
+            continue  # This segment had no recognisable speech — skip it
+        except Exception as err:
+            print(f"Segment transcription error: {err}")
+            continue
+
+    if not transcripts:
+        return {"message": "No speech detected in any voiced segment"}
+
+    # Join multiple voiced segments separated by " — " for readability.
+    full_transcript = " — ".join(transcripts)
+    safe_print(f"[VAD] Recognised {len(transcripts)} segment(s): {full_transcript}")
+
+    # ── Step 3: Translate and broadcast ──────────────────────────────────────
     sequence_id = int(asyncio.get_running_loop().time() * 1000)
-    background_tasks.add_task(process_and_send, transcript, sequence_id, audio_chunk.targetLanguage)
-    return {"message": "Audio translated", "transcript": transcript, "languages": SUPPORTED_LANGUAGES}
+    background_tasks.add_task(process_and_send, full_transcript, sequence_id, audio_chunk.targetLanguage)
+    return {"message": "Audio translated", "transcript": full_transcript, "languages": SUPPORTED_LANGUAGES}
 
 @app.get("/")
 def read_root():

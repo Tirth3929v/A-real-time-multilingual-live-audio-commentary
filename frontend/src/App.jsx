@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import './index.css';
+import { useAudioQueue }       from './useAudioQueue';
+import { useSilenceDetector }  from './useSilenceDetector';
+import { useYouTubeDuck }      from './useYouTubeDuck';
 
 const reactionsList = ['🔥', '⚽', '👏', '🇪🇸', '🇮🇳', '🎉'];
 const languages = [
@@ -9,7 +12,7 @@ const languages = [
   { value: 'hi', label: 'Hindi', native: 'हिन्दी' },
   { value: 'gu', label: 'Gujarati', native: 'ગુજરાતી' },
 ];
-const AUDIO_ENDPOINTS = ['/api/audio', 'http://localhost:8001/audio'];
+
 
 const Icon = ({ name, size = 20 }) => {
   const paths = {
@@ -38,16 +41,96 @@ export default function App() {
   const [captureStatus, setCaptureStatus] = useState('Ready to capture a shared tab');
   const [isCapturing, setIsCapturing] = useState(false);
   const [sourceLanguage, setSourceLanguage] = useState('en');
-  const wsRef = useRef(null);
-  const isPlayingRef = useRef(false);
-  const languageRef = useRef('hi');
-  const audioQueueRef = useRef(Promise.resolve());
-  const captureRef = useRef(null);
-  const isSendingAudioRef = useRef(false);
+  const wsRef          = useRef(null);
+  const isPlayingRef   = useRef(false);
+  const languageRef    = useRef('hi');
+  const sourceLanguageRef = useRef('en');
+
+  // ── YouTube duck hook ───────────────────────────────────────────────
+  const { iframeRef, initPlayer, duckVolume, restoreVolume } = useYouTubeDuck();
+
+  // ── Gapless audio queue (with duck callbacks) ──────────────────────────
+  const { enqueue, stop: stopAudio, flush } = useAudioQueue({
+    onPlay: duckVolume,
+    onEnd:  restoreVolume,
+  });
+
   const selectedLanguage = languages.find(({ value }) => value === language);
 
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { languageRef.current = language; }, [language]);
+  useEffect(() => { sourceLanguageRef.current = sourceLanguage; }, [sourceLanguage]);
+
+  // ── Silence-detector hook — declared here so it is ALWAYS above regular ──
+  // functions. React's Rules of Hooks require every hook call to occur
+  // unconditionally at the top level of the component. Moving useCallback and
+  // useSilenceDetector above loadVideo / startCapture fixes the hook-order crash.
+  const sendAudioChunk = useCallback(async (wavBytes) => {
+    try {
+      const binary = String.fromCharCode(...wavBytes);
+      const request = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audio: btoa(binary),
+          sourceLanguage: sourceLanguageRef.current,
+          targetLanguage: languageRef.current,
+        }),
+      };
+      const AUDIO_ENDPOINTS_LOCAL = [
+        '/api/audio',
+        'http://localhost:8000/audio',
+        'http://127.0.0.1:8000/audio'
+      ];
+      let lastError = null;
+      let lastResult = null;
+      for (const endpoint of AUDIO_ENDPOINTS_LOCAL) {
+        try {
+          const response = await fetch(endpoint, request);
+          const result   = await response.json().catch(() => ({}));
+          // If the server proxy is misconfigured or returns a transient gateway error, failover.
+          if (response.status === 404 || response.status === 502 || response.status === 504) {
+            lastResult = result;
+            continue;
+          }
+          if (result.transcript) {
+            setCaptureStatus(`Heard: "${result.transcript}"`);
+            return; // Success!
+          } else if (!response.ok) {
+            setCaptureStatus(result.detail || result.message || 'Speech could not be translated.');
+            return;
+          }
+        } catch (err) {
+          lastError = err;
+          // Continue to next fallback url (e.g. direct to Python API instead of Vite proxy)
+          continue;
+        }
+      }
+      if (lastError) throw lastError;
+      setCaptureStatus(lastResult?.message || 'AI service needs to be restarted.');
+    } catch {
+      setCaptureStatus('AI service unavailable — start it on port 8000.');
+    }
+  }, []);
+
+  const { startDetection, stopDetection } = useSilenceDetector({
+    onSpeechEnd:    sendAudioChunk,
+    onStatusChange: setCaptureStatus,
+  });
+
+  // Stable ref so the WebSocket cleanup effect can call stopDetection() without
+  // adding it to the effect dependency array (which would reconnect the socket
+  // every time stopDetection changes identity after a re-render).
+  const stopDetectionRef = useRef(stopDetection);
+  useEffect(() => { stopDetectionRef.current = stopDetection; }, [stopDetection]);
+
+  // YT Player must be initialized in useEffect after the new iframe DOM element
+  // has been mounted by React (since key={videoId} destroys and recreates it).
+  useEffect(() => {
+    if (videoId) {
+      initPlayer(videoId);
+    }
+  }, [videoId, initPlayer]);
 
   useEffect(() => {
     wsRef.current = new WebSocket('ws://localhost:3001');
@@ -60,28 +143,55 @@ export default function App() {
         const data = JSON.parse(event.data);
         const text = data.translatedText || (data.type === 'text' && data.payload);
         if (text) setLiveText((prev) => [{ id: data.sequenceId || data.seqId || Date.now(), time: 'LIVE NOW', text }, ...prev].slice(0, 10));
-        if (text && isPlayingRef.current) {
-          queueSpeech(data.audioBuffer, data.audioAvailable, text, languageRef.current);
+        // Only enqueue audio when the player is active.
+        if (isPlayingRef.current) {
+          if (data.audioAvailable && data.audioBuffer) {
+            // Gapless Web Audio API path — always preferred.
+            enqueue(data.audioBuffer);
+          } else if (text) {
+            // Text-only fallback: browser SpeechSynthesis.
+            speakWithBrowserVoice(text, languageRef.current);
+          }
         }
       } catch { /* Ignore malformed stream packets. */ }
     };
     wsRef.current.onclose = () => setIsConnected(false);
-    return () => { wsRef.current?.close(); window.speechSynthesis?.cancel(); stopCapture(); };
-  }, []);
+    return () => { wsRef.current?.close(); window.speechSynthesis?.cancel(); stopDetectionRef.current(); };
+  }, [enqueue]);
 
   function getYouTubeId(value) {
-    try {
-      const url = new URL(value);
-      if (url.hostname.includes('youtu.be')) return url.pathname.slice(1).split('/')[0];
-      return url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).pop();
-    } catch { return value.match(/^[\w-]{11}$/)?.[0] || ''; }
+    if (!value) return '';
+    const s = value.trim();
+
+    // Short link:  youtu.be/<ID>
+    if (s.includes('youtu.be/')) {
+      return s.split('youtu.be/')[1].split(/[?&]/)[0];
+    }
+    // Standard:    youtube.com/watch?v=<ID>  or  ?v=<ID>&...
+    if (s.includes('v=')) {
+      return s.split('v=')[1].split(/[?&#]/)[0];
+    }
+    // Embed link:  youtube.com/embed/<ID>
+    if (s.includes('embed/')) {
+      return s.split('embed/')[1].split(/[?&]/)[0];
+    }
+    // Shorts:      youtube.com/shorts/<ID>
+    if (s.includes('/shorts/')) {
+      return s.split('/shorts/')[1].split(/[?&]/)[0];
+    }
+    // Bare 11-char video ID pasted directly
+    return s.match(/^[\w-]{11}$/)?.[0] || '';
   }
 
   function loadVideo(event) {
     event.preventDefault();
     const id = getYouTubeId(videoUrl);
     setVideoId(id);
-    setCaptureStatus(id ? 'Video loaded — choose “share audio” to translate it' : 'Paste a valid YouTube URL or video ID');
+    if (id) {
+      setCaptureStatus('Video loaded — choose “share audio” to translate it');
+    } else {
+      setCaptureStatus('Paste a valid YouTube URL or video ID');
+    }
   }
 
   async function startCapture() {
@@ -90,113 +200,29 @@ export default function App() {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ 
-        video: true, 
-        audio: { suppressLocalAudioPlayback: true } 
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: { suppressLocalAudioPlayback: true },
       });
       if (!stream.getAudioTracks().length) {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((t) => t.stop());
         setCaptureStatus('No audio was shared. Select the YouTube tab and enable “Share tab audio”.');
         return;
       }
-      const context = new AudioContext();
-      const source = context.createMediaStreamSource(stream);
-      const workletCode = `class CaptureProcessor extends AudioWorkletProcessor { process(inputs) { const channel = inputs[0][0]; if (channel) this.port.postMessage(channel); return true; } } registerProcessor('capture-processor', CaptureProcessor);`;
-      const workletUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
-      await context.audioWorklet.addModule(workletUrl);
-      URL.revokeObjectURL(workletUrl);
-      const processor = new AudioWorkletNode(context, 'capture-processor');
-      const silentGain = context.createGain();
-      silentGain.gain.value = 0;
-      const chunks = [];
-      let length = 0;
-      source.connect(processor);
-      processor.connect(silentGain);
-      silentGain.connect(context.destination);
-      processor.port.onmessage = (event) => {
-        const channel = event.data;
-        chunks.push(new Float32Array(channel));
-        length += channel.length;
-        if (length >= context.sampleRate * 2) {
-          const combined = new Float32Array(length);
-          let offset = 0;
-          chunks.forEach((part) => { combined.set(part, offset); offset += part.length; });
-          chunks.length = 0; length = 0;
-          sendAudioChunk(floatToWav(combined, context.sampleRate));
-        }
-      };
-      stream.getVideoTracks()[0].onended = stopCapture;
-      captureRef.current = { stream, context, source, processor, silentGain };
-      await context.resume();
+      await startDetection(stream);
       setIsCapturing(true);
-      setCaptureStatus('Listening to tab audio and translating every few seconds');
     } catch (error) {
       setCaptureStatus(error.name === 'NotAllowedError' ? 'Tab sharing was cancelled.' : 'Could not start audio capture.');
     }
   }
 
   function stopCapture() {
-    const capture = captureRef.current;
-    if (!capture) return;
-    capture.processor.disconnect(); capture.silentGain.disconnect(); capture.source.disconnect(); capture.stream.getTracks().forEach((track) => track.stop()); capture.context.close();
-    captureRef.current = null;
+    stopDetection();
     setIsCapturing(false);
-    setCaptureStatus('Capture stopped');
   }
 
-  async function sendAudioChunk(wavBytes) {
-    if (isSendingAudioRef.current) return;
-    isSendingAudioRef.current = true;
-    try {
-      const binary = String.fromCharCode(...wavBytes);
-      const request = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio: btoa(binary), sourceLanguage, targetLanguage: languageRef.current }) };
-      let lastResult = null;
-      for (const endpoint of AUDIO_ENDPOINTS) {
-        const response = await fetch(endpoint, request);
-        const result = await response.json().catch(() => ({}));
-        if (response.status === 404) { lastResult = result; continue; }
-        if (result.transcript) setCaptureStatus(`Heard: “${result.transcript}”`);
-        else if (!response.ok) setCaptureStatus(result.detail || result.message || 'Speech could not be translated.');
-        return;
-      }
-      setCaptureStatus(lastResult?.message || 'The AI service needs to be restarted with the current code.');
-    } catch { setCaptureStatus('AI service unavailable — start it on port 8000.'); }
-    finally { isSendingAudioRef.current = false; }
-  }
-
-  function floatToWav(samples, inputRate) {
-    const targetRate = 16000;
-    const ratio = inputRate / targetRate;
-    const output = new Int16Array(Math.floor(samples.length / ratio));
-    for (let index = 0; index < output.length; index += 1) {
-      const start = Math.floor(index * ratio); const end = Math.min(Math.floor((index + 1) * ratio), samples.length);
-      let sum = 0; for (let sample = start; sample < end; sample += 1) sum += samples[sample];
-      output[index] = Math.max(-1, Math.min(1, sum / Math.max(1, end - start))) * 0x7fff;
-    }
-    const buffer = new ArrayBuffer(44 + output.byteLength); const view = new DataView(buffer);
-    const write = (offset, value) => [...value].forEach((char, index) => view.setUint8(offset + index, char.charCodeAt(0)));
-    write(0, 'RIFF'); view.setUint32(4, 36 + output.byteLength, true); write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, targetRate, true); view.setUint32(28, targetRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, 'data'); view.setUint32(40, output.byteLength, true); new Int16Array(buffer, 44).set(output);
-    return new Uint8Array(buffer);
-  }
-
-  function queueSpeech(audioBuffer, audioAvailable, text, langCode) {
-    audioQueueRef.current = audioQueueRef.current.then(async () => {
-      if (audioAvailable && audioBuffer) {
-        const mimeType = audioBuffer.startsWith('UklGR') ? 'audio/wav' : 'audio/mpeg';
-        const audio = new Audio(`data:${mimeType};base64,${audioBuffer}`);
-        try {
-          await new Promise((resolve, reject) => {
-            audio.onended = resolve;
-            audio.onerror = reject;
-            audio.play().catch(reject);
-          });
-          return;
-        } catch { /* A local high-quality system voice is the reliable fallback. */ }
-      }
-      await speakWithBrowserVoice(text, langCode);
-    });
-  }
-
+  // speakWithBrowserVoice is kept as the text-only fallback path when the
+  // server does not return an audioBuffer (e.g. during TTS failures).
   function speakWithBrowserVoice(text, langCode) {
     if (!('speechSynthesis' in window)) return Promise.resolve();
     const locale = { en: 'en-US', es: 'es-ES', fr: 'fr-FR', hi: 'hi-IN', gu: 'gu-IN' }[langCode] || 'en-US';
@@ -254,7 +280,19 @@ export default function App() {
           <div className="watch-copy"><span className="section-kicker">WATCH + TRANSLATE</span><h1>Your match.<br /><em>Your language.</em></h1><p>Paste any public YouTube match video, then share that tab’s audio. StadiumVoice transcribes the source and speaks it in your selected language.</p><div className={`capture-state ${isCapturing ? 'active' : ''}`}><span className="live-dot" />{captureStatus}</div></div>
           <div className="video-console">
             <div className="youtube-wrapper" style={{ display: 'contents' }}>
-              {videoId ? <iframe key={videoId} className="youtube-frame" src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=0&rel=0`} title="YouTube match source" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <div className="video-placeholder"><Icon name="video" size={36} /><strong>Load a public YouTube video</strong><span>Its audio stays in the player while your selected translation voice plays here.</span></div>}
+              {videoId
+                ? <iframe
+                    ref={iframeRef}
+                    id="yt-player"
+                    key={videoId}
+                    className="youtube-frame"
+                    src={`https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                    title="YouTube match source"
+                    allow="autoplay; encrypted-media; picture-in-picture"
+                    allowFullScreen
+                  />
+                : <div className="video-placeholder"><Icon name="video" size={36} /><strong>Load a public YouTube video</strong><span>Its audio stays in the player while your selected translation voice plays here.</span></div>
+              }
             </div>
             <form className="video-form" onSubmit={loadVideo}><span><Icon name="link" size={16} /></span><input value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste YouTube video URL or ID" aria-label="YouTube video URL" /><button type="submit">Load video</button></form>
             <div className="capture-controls"><div><small>SOURCE LANGUAGE</small><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)}>{languages.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div><button className={`capture-button ${isCapturing ? 'stop' : ''}`} type="button" onClick={isCapturing ? stopCapture : startCapture}><Icon name="mic" size={17} />{isCapturing ? 'Stop listening' : 'Share tab audio'}</button></div>
@@ -266,7 +304,19 @@ export default function App() {
             <div className="card-eyebrow"><span><span className="live-dot" /> LIVE COMMENTARY</span><span className="listener-count">● 12.8K listening</span></div>
             <div className="listen-intro"><p>Hear every moment, <em>in your language.</em></p><span>AI-powered commentary, delivered in real time.</span></div>
             <div className="audio-deck">
-              <button className={`play-button ${isPlaying ? 'playing' : ''}`} onClick={() => setIsPlaying((value) => { if (value) window.speechSynthesis?.cancel(); return !value; })} aria-label={isPlaying ? 'Pause commentary' : 'Listen to commentary'}><Icon name={isPlaying ? 'pause' : 'play'} size={25} /></button>
+              <button className={`play-button ${isPlaying ? 'playing' : ''}`} onClick={() => {
+                setIsPlaying((value) => {
+                  if (value) {
+                    // Pause: immediately silence the Web Audio queue.
+                    stopAudio();
+                    window.speechSynthesis?.cancel();
+                  } else {
+                    // Resume: flush any audio that arrived before the gesture.
+                    flush();
+                  }
+                  return !value;
+                });
+              }} aria-label={isPlaying ? 'Pause commentary' : 'Listen to commentary'}><Icon name={isPlaying ? 'pause' : 'play'} size={25} /></button>
               <div className="waveform" aria-hidden="true">{Array.from({ length: 36 }, (_, i) => <i key={i} style={{ '--i': i, '--h': `${20 + ((i * 37) % 68)}%`, animationPlayState: isPlaying ? 'running' : 'paused' }} />)}</div>
               <button className="volume-button" aria-label="Volume"><Icon name="volume" size={20} /></button>
             </div>
