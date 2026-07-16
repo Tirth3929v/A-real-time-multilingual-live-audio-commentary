@@ -133,7 +133,8 @@ export default function App() {
   }, [videoId, initPlayer]);
 
   useEffect(() => {
-    wsRef.current = new WebSocket('ws://localhost:3001');
+    const WEBSOCKET_URL = import.meta.env.VITE_NODE_ORCHESTRATOR_URL || 'ws://localhost:3001';
+    wsRef.current = new WebSocket(WEBSOCKET_URL);
     wsRef.current.onopen = () => {
       setIsConnected(true);
       wsRef.current.send(JSON.stringify({ type: 'join_room', language: languageRef.current }));
