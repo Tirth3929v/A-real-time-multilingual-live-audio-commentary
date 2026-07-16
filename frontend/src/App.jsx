@@ -133,8 +133,10 @@ export default function App() {
   }, [videoId, initPlayer]);
 
   useEffect(() => {
-    const WEBSOCKET_URL = import.meta.env.VITE_NODE_ORCHESTRATOR_URL || 'ws://localhost:3001';
-    wsRef.current = new WebSocket(WEBSOCKET_URL);
+    const wsUrl = import.meta.env.MODE === 'production'
+      ? 'wss://a-real-time-multilingual-live-audio.onrender.com'
+      : (import.meta.env.VITE_NODE_ORCHESTRATOR_URL || 'ws://localhost:3001');
+    wsRef.current = new WebSocket(wsUrl);
     wsRef.current.onopen = () => {
       setIsConnected(true);
       wsRef.current.send(JSON.stringify({ type: 'join_room', language: languageRef.current }));
