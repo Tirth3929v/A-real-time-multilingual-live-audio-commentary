@@ -245,9 +245,19 @@ export default function App() {
     utterance.rate = 1.03;
     const voice = window.speechSynthesis.getVoices().find((item) => item.lang.toLowerCase().startsWith(locale.slice(0, 2).toLowerCase()));
     if (voice) utterance.voice = voice;
+    
+    // Duck the YouTube volume when TTS starts
+    duckVolume();
+    
     return new Promise((resolve) => {
-      utterance.onend = resolve;
-      utterance.onerror = resolve;
+      utterance.onend = () => {
+        restoreVolume();
+        resolve();
+      };
+      utterance.onerror = () => {
+        restoreVolume();
+        resolve();
+      };
       window.speechSynthesis.speak(utterance);
     });
   }
