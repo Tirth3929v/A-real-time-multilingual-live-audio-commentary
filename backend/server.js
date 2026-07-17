@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const { translateCommentary } = require('./src/services/translationService');
 
 const app = express();
 const server = http.createServer(app);
@@ -57,7 +58,7 @@ wss.on('connection', (ws) => {
     seqId: Date.now()
   }));
 
-  ws.on('message', (message) => {
+  ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
       
@@ -82,6 +83,17 @@ wss.on('connection', (ws) => {
           type: 'text',
           payload: `Joined ${language.toUpperCase()} commentary stream.`,
           seqId: Date.now()
+        }));
+      } else if (data.type === 'TRANSCRIPTION_READY') {
+        // 1. Trigger the OpenRouter translation
+        console.log(`📝 Received TRANSCRIPTION_READY: "${data.text}"`);
+        const translatedText = await translateCommentary(data.text, 'Hindi');
+        console.log(`🤖 Translated via OpenRouter: "${translatedText}"`);
+
+        // 2. Broadcast the translation directly back to the fan's frontend
+        ws.send(JSON.stringify({
+          type: 'TRANSLATION_BURST',
+          text: translatedText
         }));
       }
     } catch (e) {

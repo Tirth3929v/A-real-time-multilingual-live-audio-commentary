@@ -77,14 +77,17 @@ export default function App() {
           targetLanguage: languageRef.current,
         }),
       };
-      const AUDIO_ENDPOINTS_LOCAL = [
+      const aiBackendUrl = import.meta.env.MODE === 'production'
+        ? (import.meta.env.VITE_AI_BACKEND_URL || 'https://stadiumvoice-ai.onrender.com')
+        : 'http://localhost:8000';
+      const AUDIO_ENDPOINTS = [
         '/api/audio',
-        'http://localhost:8000/audio',
+        `${aiBackendUrl}/audio`,
         'http://127.0.0.1:8000/audio'
       ];
       let lastError = null;
       let lastResult = null;
-      for (const endpoint of AUDIO_ENDPOINTS_LOCAL) {
+      for (const endpoint of AUDIO_ENDPOINTS) {
         try {
           const response = await fetch(endpoint, request);
           const result   = await response.json().catch(() => ({}));
@@ -144,6 +147,11 @@ export default function App() {
     wsRef.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'TRANSLATION_BURST') {
+          speakWithBrowserVoice(data.text, languageRef.current);
+          setLiveText((prev) => [{ id: data.sequenceId || data.seqId || Date.now(), time: 'LIVE NOW', text: data.text }, ...prev].slice(0, 10));
+          return;
+        }
         const text = data.translatedText || (data.type === 'text' && data.payload);
         if (text) setLiveText((prev) => [{ id: data.sequenceId || data.seqId || Date.now(), time: 'LIVE NOW', text }, ...prev].slice(0, 10));
         // Only enqueue audio when the player is active.
