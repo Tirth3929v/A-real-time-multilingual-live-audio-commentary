@@ -24,30 +24,30 @@ The following diagram illustrates how audio commentary flows through the GlobalM
 
 ```mermaid
 flowchart TD
-    subgraph Browser Client (Broadcaster)
-        A[YouTube Video / Mic Stream] -->|Audio Capture| B[useSilenceDetector Hook]
-        B -->|RMS Energy VAD Check| C[Clean Speech Detection]
-        C -->|FileReader Base64 Conversion| D[POST /audio]
+    subgraph BC ["Browser Client (Broadcaster)"]
+        A["YouTube Video / Mic Stream"] -->|Audio Capture| B["useSilenceDetector Hook"]
+        B -->|RMS Energy VAD Check| C["Clean Speech Detection"]
+        C -->|FileReader Base64 Conversion| D["POST /audio"]
     end
 
-    subgraph AI Service (FastAPI on Port 8000)
-        D --> E[VAD Segment Filter]
-        E -->|Recognize Google STT| F[English Transcription]
-        F -->|Gemini / Free API Fallback| G[Target Language Translation]
-        G -->|Edge TTS| H[Generate Audio Buffer]
-        H -->|POST /internal/stream-update| I[JSON Stream Update Payload]
+    subgraph AS ["AI Service (FastAPI on Port 8000)"]
+        D --> E["VAD Segment Filter"]
+        E -->|Recognize Google STT| F["English Transcription"]
+        F -->|Gemini / Free API Fallback| G["Target Language Translation"]
+        G -->|Edge TTS| H["Generate Audio Buffer"]
+        H -->|POST /internal/stream-update| I["JSON Stream Update Payload"]
     end
 
-    subgraph Orchestrator Server (Node.js on Port 3001)
-        I --> J[WebSocket Server]
-        J -->|Broadcast Room Message| K[Room Clients: HI, GU, ES, FR, EN]
+    subgraph OS ["Orchestrator Server (Node.js on Port 3001)"]
+        I --> J["WebSocket Server"]
+        J -->|Broadcast Room Message| K["Room Clients: HI, GU, ES, FR, EN"]
     end
 
-    subgraph Browser Client (Listener)
-        K -->|WS Message| L[useAudioQueue Hook]
-        M[User Play Gesture] -->|Creates/Resumes context| N[Active AudioContext]
-        L -->|Decode Base64 ArrayBuffer| O[AudioBufferSourceNode]
-        O -->|Queue Scheduling| P[Gapless Playback through Speakers]
+    subgraph BL ["Browser Client (Listener)"]
+        K -->|WS Message| L["useAudioQueue Hook"]
+        M["User Play Gesture"] -->|Creates/Resumes context| N["Active AudioContext"]
+        L -->|Decode Base64 ArrayBuffer| O["AudioBufferSourceNode"]
+        O -->|Queue Scheduling| P["Gapless Playback through Speakers"]
         N -.-> O
     end
 ```
