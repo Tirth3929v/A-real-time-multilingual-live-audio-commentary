@@ -99,6 +99,9 @@ export default function App() {
           if (result.transcript) {
             setCaptureStatus(`Heard: "${result.transcript}"`);
             return; // Success!
+          } else if (response.ok) {
+            setCaptureStatus(result.message || 'Listening...');
+            return;
           } else if (!response.ok) {
             setCaptureStatus(result.detail || result.message || 'Speech could not be translated.');
             return;
