@@ -288,11 +288,11 @@ export default function App() {
   return (
     <div className="app-shell">
       <div className="grain" />
-      <nav className="topbar">
+      <header className="topbar">
         <a className="brand" href="#top" aria-label="Stadium Voice home"><span className="brand-mark"><Icon name="spark" size={17} /></span><span>stadium<span>voice</span></span></a>
         <div className="nav-context"><span className="live-dot" /> FIFA WORLD CUP 2026 <span className="nav-separator" /> LIVE EXPERIENCE</div>
         <div className="topbar-status"><span className={`status-pill ${isConnected ? 'online' : ''}`}><i />{isConnected ? 'LIVE' : 'OFFLINE'}</span><span className="clock">87:24</span></div>
-      </nav>
+      </header>
 
       <main id="top" className="experience">
         <section className="match-hero" aria-label="Match scoreboard">
@@ -323,8 +323,8 @@ export default function App() {
                 : <div className="video-placeholder"><Icon name="video" size={36} /><strong>Load a public YouTube video</strong><span>Its audio stays in the player while your selected translation voice plays here.</span></div>
               }
             </div>
-            <form className="video-form" onSubmit={loadVideo}><span><Icon name="link" size={16} /></span><input value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste YouTube video URL or ID" aria-label="YouTube video URL" /><button type="submit">Load video</button></form>
-            <div className="capture-controls"><div><small>SOURCE LANGUAGE</small><select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)}>{languages.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div><button className={`capture-button ${isCapturing ? 'stop' : ''}`} type="button" onClick={isCapturing ? stopCapture : startCapture}><Icon name="mic" size={17} />{isCapturing ? 'Stop listening' : 'Share tab audio'}</button></div>
+            <form className="video-form" onSubmit={loadVideo}><span><Icon name="link" size={16} /></span><label htmlFor="youtube-url-input" className="sr-only">YouTube Video URL or ID</label><input id="youtube-url-input" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste YouTube video URL or ID" aria-label="YouTube video URL" /><button type="submit" aria-label="Load YouTube video">Load video</button></form>
+            <div className="capture-controls"><div><small>SOURCE LANGUAGE</small><select aria-label="Source language" value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)}>{languages.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div><button className={`capture-button ${isCapturing ? 'stop' : ''}`} type="button" onClick={isCapturing ? stopCapture : startCapture} aria-label={isCapturing ? 'Stop sharing tab audio' : 'Start sharing tab audio'}><Icon name="mic" size={17} />{isCapturing ? 'Stop listening' : 'Share tab audio'}</button></div>
           </div>
         </section>
 
@@ -362,7 +362,7 @@ export default function App() {
           </aside>
         </section>
 
-        <section className="feed-section"><div className="feed-heading"><div><span className="section-kicker">THE LIVE FEED</span><h1>Every moment, made clear.</h1></div><button className="feed-action">View match center <Icon name="send" size={16} /></button></div><div className="feed-layout"><div className="feed-list">{liveText.length ? liveText.map((item) => <article className="feed-item" key={item.id}><span className="feed-time">{item.time}</span><p>{item.text}</p><span className="translated">Translated to {selectedLanguage.native}</span></article>) : <div className="empty-feed"><span className="pulse-ring"><i /></span><div><strong>Listening for the next moment</strong><p>Translated commentary will appear here as the match unfolds.</p></div></div>}</div><div className="moment-card"><span className="section-kicker">MATCH MOMENT</span><strong>Spain are pressing high.</strong><p>62% possession in the final 15 minutes.</p><div className="possession"><span style={{ width: '62%' }} /><i /></div><div><b>62% ESP</b><b>38% IND</b></div></div></div></section>
+        <section className="feed-section"><div className="feed-heading"><div><span className="section-kicker">THE LIVE FEED</span><h1>Every moment, made clear.</h1></div><button className="feed-action" aria-label="View match center">View match center <Icon name="send" size={16} /></button></div><div className="feed-layout"><div aria-live="polite" className="feed-list live-transcription-feed">{liveText.length ? liveText.map((item) => <article className="feed-item" key={item.id}><span className="feed-time">{item.time}</span><p>{item.text}</p><span className="translated">Translated to {selectedLanguage.native}</span></article>) : <div className="empty-feed"><span className="pulse-ring"><i /></span><div><strong>Listening for the next moment</strong><p>Translated commentary will appear here as the match unfolds.</p></div></div>}</div><div className="moment-card"><span className="section-kicker">MATCH MOMENT</span><strong>Spain are pressing high.</strong><p>62% possession in the final 15 minutes.</p><div className="possession"><span style={{ width: '62%' }} /><i /></div><div><b>62% ESP</b><b>38% IND</b></div></div></div></section>
       </main>
       <div className="reactions" aria-hidden="true">{reactions.map((reaction) => <span key={reaction.id}>{reaction.emoji}</span>)}</div>
       <footer>STADIUMVOICE · ACCESSIBLE, BORDERLESS FOOTBALL <span>2026</span></footer>

@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const http = require('http');
 const WebSocket = require('ws');
 const { translateCommentary } = require('./src/services/translationService');
@@ -10,6 +12,29 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3001;
 
+// Apply automated security header fortification
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'", "ws://localhost:3001", "http://localhost:8000", "https://*.openrouter.ai", "https://*.googleapis.com", "wss://*.onrender.com", "https://*.onrender.com", "http://127.0.0.1:8000"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+}));
+
+// Restrict spam configurations to elevate security posture
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15-minute window
+  max: 100, // Limit each IP to 100 requests per window
+  message: 'Too many requests engineered from this IP, please defer execution.',
+});
+app.use('/api/', limiter);
+// Also apply to internal route for safety
+app.use('/internal/', limiter);
+
 app.use(express.json({ limit: '50mb' }));
 
 app.get('/', (req, res) => {
@@ -18,6 +43,16 @@ app.get('/', (req, res) => {
 
 app.post('/internal/stream-update', (req, res) => {
   const payload = req.body;
+  if (!payload || typeof payload !== 'object' || !payload.languageRoom) {
+    return res.status(400).json({ error: 'Malformated or structurally deficient payload structure.' });
+  }
+
+  // Deep Sanitization Layer: reject payloads with XSS vectors
+  const xssPattern = /<[^>]*>?/gm;
+  if (payload.originalText && xssPattern.test(payload.originalText)) {
+    return res.status(400).json({ error: 'Payload contains illegal anomalous symbols.' });
+  }
+
   const { languageRoom, sequenceId, originalText } = payload;
   console.log(`📡 Received stream update for room: ${languageRoom} (Seq: ${sequenceId}): "${originalText}"`);
   
@@ -110,6 +145,10 @@ wss.on('connection', (ws) => {
 });
 
 
-server.listen(PORT, () => {
-  console.log(`Node.js orchestration server listening on port ${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Node.js orchestration server listening on port ${PORT}`);
+  });
+}
+
+module.exports = { app, server };

@@ -3,9 +3,12 @@ import asyncio
 import base64
 import io
 import httpx
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel, Field
 import speech_recognition as sr
 from dotenv import load_dotenv
 
@@ -15,7 +18,11 @@ from src.tts import generate_audio_stream
 from src.vad import wav_segments_from_buffer
 
 load_dotenv()
+
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -26,7 +33,7 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 NODE_URL = os.getenv("NODE_WS_URL", "http://localhost:3001/internal/stream-update")
@@ -42,13 +49,13 @@ MOCK_FEED = [
 SUPPORTED_LANGUAGES = ("en", "es", "fr", "hi", "gu")
 
 class CommentaryInput(BaseModel):
-    text: str
-    sourceLanguage: str = "auto"
+    text: str = Field(..., max_length=2000, description="The raw transcription text to be translated")
+    sourceLanguage: str = Field("auto", max_length=10)
 
 class AudioChunk(BaseModel):
-    audio: str
-    sourceLanguage: str = "en"
-    targetLanguage: str = "hi"
+    audio: str = Field(..., description="Base64 encoded audio byte stream")
+    sourceLanguage: str = Field("en", max_length=10)
+    targetLanguage: str = Field("hi", max_length=10)
 
 SPEECH_LANGUAGE_MAP = {
     'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'hi': 'hi-IN', 'gu': 'gu-IN'
@@ -193,5 +200,6 @@ async def receive_audio(audio_chunk: AudioChunk, background_tasks: BackgroundTas
     return {"message": "Audio translated", "transcript": full_transcript, "languages": SUPPORTED_LANGUAGES}
 
 @app.get("/")
-def read_root():
-    return {"status": "AI Service is running!"}
+@limiter.limit("5/minute")
+async def root(request: Request):
+    return {"status": "AI Service is active and functional!"}
