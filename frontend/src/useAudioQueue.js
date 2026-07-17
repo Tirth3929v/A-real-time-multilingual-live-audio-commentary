@@ -196,11 +196,17 @@ export function useAudioQueue({ onPlay, onEnd } = {}) {
    * In practice, enqueue() from the play button's onClick is sufficient.
    */
   const flush = useCallback(async () => {
+    // Force initialize/resume the AudioContext during this user gesture!
+    try {
+      getContext();
+    } catch (e) {
+      console.warn('[useAudioQueue] Failed to initialize AudioContext on flush:', e);
+    }
     const pending = pendingRef.current.splice(0);
     for (const b64 of pending) {
       await enqueue(b64);
     }
-  }, [enqueue]);
+  }, [getContext, enqueue]);
 
   // ── Public: stop() ──────────────────────────────────────────────────────────
   /**

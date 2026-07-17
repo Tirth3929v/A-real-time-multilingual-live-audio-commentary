@@ -157,7 +157,7 @@ async def receive_audio(audio_chunk: AudioChunk, background_tasks: BackgroundTas
         speech_wav_segments = [raw_audio]  # Graceful fallback: process entire buffer
 
     if not speech_wav_segments:
-        return {"message": "No speech detected — only silence or background noise found"}
+        speech_wav_segments = [raw_audio]  # Fallback: process entire buffer if VAD returns nothing
 
     # ── Step 2: Transcribe each voiced segment ────────────────────────────────
     recognizer = sr.Recognizer()

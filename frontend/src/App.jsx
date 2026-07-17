@@ -67,12 +67,17 @@ export default function App() {
   // useSilenceDetector above loadVideo / startCapture fixes the hook-order crash.
   const sendAudioChunk = useCallback(async (wavBytes) => {
     try {
-      const binary = String.fromCharCode(...wavBytes);
+      const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(new Blob([wavBytes]));
+      });
       const request = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          audio: btoa(binary),
+          audio: base64Audio,
           sourceLanguage: sourceLanguageRef.current,
           targetLanguage: languageRef.current,
         }),
