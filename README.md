@@ -1,5 +1,7 @@
 # GlobalMatch AI: Real-Time Multilingual Live Audio Commentary
 
+🔗 **Live Application URL**: [https://a-real-time-multilingual-live-audio.vercel.app/](https://a-real-time-multilingual-live-audio.vercel.app/)
+
 GlobalMatch AI is a real-time, multilingual live audio commentary streaming system designed for live sports broadcasting. The system captures English commentary directly from a live source (such as a shared browser tab running a YouTube stream or a commentator microphone), transcribes the audio, translates it dynamically to multiple target languages in real-time, and streams high-fidelity neural audio commentary back to listeners in their selected language.
 
 ---
