@@ -79,7 +79,7 @@ export default function App() {
       };
       const aiBackendUrl = import.meta.env.MODE === 'production'
         ? (import.meta.env.VITE_AI_BACKEND_URL || 'https://stadiumvoice-ai.onrender.com')
-        : 'http://localhost:8000';
+        : 'http://127.0.0.1:8000';
       const AUDIO_ENDPOINTS = [
         '/api/audio',
         `${aiBackendUrl}/audio`,
